@@ -1,9 +1,9 @@
 # 个人项目
 
-这里收录我在好奇心驱动下构思、借助 AI 协作实现并持续完善的个人项目，既有面向阅读和纸本文档处理的桌面工具，也有围绕智能体与复杂系统展开的长期探索。仓库侧重公开项目架构、核心源码和必要构建组件，不保证所有项目都能在任意设备上直接运行；遇到运行环境、外部模型、系统工具或打印机驱动差异时，请进入对应项目目录查看说明，并可由使用者自己的 Agent 补齐依赖或协助重新编译。每个项目的完整功能说明、使用方式和依赖要求都在各自项目页中，首页只保留概览和入口。
+这里开源展示我在 AI 的帮助下编译的几个个人项目。
 
-## 项目
+**[英文阅读器](english-reader/README.md)：** 一款用于阅读英文文章的桌面应用，支持文章朗读、普通词典查词，以及点击查词窗口中的放大镜获取 AI 语义解释，也提供阅读历史和词汇复习功能。
 
-- [英文阅读器](english-reader/README.md)：英文阅读、朗读、查词与词汇复习。
-- [小册子拼版打印机](cutstack-booklet-printer/README.md)：文本排版、PDF 预览与小册子拼版打印。
-- [点火（When Systems Catch Fire）](https://github.com/Arvin-liu/when-systems-catch-fire)：一个人类在好奇心驱动下、借助 AI 做出的作品。
+**[小册子拼版打印机](cutstack-booklet-printer/README.md)：** 将输入文本排版为 A6 文档和 A4 双面打印稿，支持 2×2 小册子拼版、PDF 预览与打印。
+
+**[点火（When Systems Catch Fire）](https://github.com/Arvin-liu/when-systems-catch-fire)：** 一个由好奇心驱动、借助 AI 创作的个人项目，项目介绍和详细内容请查看点火仓库。
