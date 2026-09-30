@@ -1,6 +1,6 @@
 # 英文阅读器
 
-© 2026 Arvin-liu. 许可证和署名要求见 [NOTICE](NOTICE.md) 与 [LICENSE](LICENSE)。
+© 2026 Arvin-liu. 许可证和署名要求见 [NOTICE](../NOTICE.md) 与 [LICENSE](../LICENSE)。
 
 这是一个基于 Python 和 Tkinter 的英文阅读器个人项目，提供英文文章阅读与朗读、网易有道查词、阅读历史和词汇复习等功能。
 
@@ -25,9 +25,10 @@
 
 运行时可能需要使用者自行安装带 Tk 的 Python 3、Piper 与相应语音模型、Hermes 及已配置的模型服务。查词需要网络连接。上述账号、凭据和模型文件均由使用者自行配置，本仓库不提供。
 
-macOS 构建需要 macOS 13 或更高版本，以及 Python 3/Tk。可尝试在仓库目录运行：
+macOS 构建需要 macOS 13 或更高版本，以及 Python 3/Tk。进入项目目录后运行：
 
 ```bash
+cd english-reader
 ./install_ebook_reader_app.sh
 ```
 
@@ -37,6 +38,6 @@ macOS 构建需要 macOS 13 或更高版本，以及 Python 3/Tk。可尝试在�
 
 ## 许可
 
-本项目原创源码和文档按 **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International（CC BY-NC-SA 4.0）** 发布：允许非商业使用、修改、编译和再发布；再发布时须注明来源、提供许可链接、说明改动，并将改编内容按相同许可发布。完整条款见 [LICENSE](LICENSE) 和 [官方许可页](https://creativecommons.org/licenses/by-nc-sa/4.0/)。再发布时请保留 [NOTICE](NOTICE.md)。第三方组件及服务不在本项目许可范围内，仍适用各自条款。
+本项目原创源码和文档按 **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International（CC BY-NC-SA 4.0）** 发布：允许非商业使用、修改、编译和再发布；再发布时须注明来源、提供许可链接、说明改动，并将改编内容按相同许可发布。完整条款见 [LICENSE](../LICENSE) 和 [官方许可页](https://creativecommons.org/licenses/by-nc-sa/4.0/)。再发布时请保留 [NOTICE](../NOTICE.md)。第三方组件及服务不在本项目许可范围内，仍适用各自条款。
 
 Creative Commons [官方说明](https://creativecommons.org/faq/#can-i-apply-a-creative-commons-license-to-software)不推荐将 CC 许可用于软件，因为它没有覆盖软件专属的源码分发和专利条款。软件专用的非商业许可证可参考 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/)，但它没有 CC BY-NC-SA 4.0 明确的“改编后相同许可”条款。此处按项目发布者的选择采用 CC BY-NC-SA 4.0。因该许可限制商业用途，根据 [OSI 开源定义第 6 条](https://opensource.org/osd)，本仓库属于公开源码的个人项目，不称为 OSI 定义的开源软件。
