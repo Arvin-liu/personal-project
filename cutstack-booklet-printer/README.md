@@ -1,39 +1,39 @@
-# CutStack Booklet Printer
+# 小册子拼版打印机（CutStack Booklet Printer）
 
-CutStack Booklet Printer lays out plain text as paginated A6 PDFs and can impose pages onto A4 sheets for duplex printing. It also supports ordinary A4 output, PDF preview, and optional direct printing through the local print system.
+这是一款桌面排版工具，可以把输入的纯文本排成 A6 页面，再按 2×2 方式拼到 A4 纸上进行双面打印。它也支持常规 A4 输出、PDF 预览，以及通过本机打印系统直接打印。
 
-This is a personal project. The repository contains source code, project structure, and the components needed to build the app. It does not contain the publisher's printer configuration, user documents, generated PDFs, launch tokens, virtual environments, or a prebuilt app bundle.
+这是一个个人项目。仓库只包含源代码、项目结构和构建应用所需的组件，不包含作者的打印机配置、用户文档、生成的 PDF、运行时启动令牌、虚拟环境或预编译应用包。
 
-## How it works
+## 工作流程
 
-1. Enter or paste text in the editor.
-2. Choose a target page count and layout settings.
-3. The app creates a paginated A6 source PDF.
-4. Choose A4 output or 2×2 cut-and-stack imposition.
-5. Preview the resulting PDF, then print it using the device's normal duplex settings.
+1. 在编辑区输入或粘贴文本。
+2. 选择目标页数和排版设置。
+3. 程序生成分页后的 A6 源 PDF。
+4. 选择常规 A4 输出，或 2×2 小册子拼版。
+5. 预览生成的 PDF，再按打印机的常规双面打印设置进行打印。
 
-Generated files are saved under `~/cutstack-booklet-printer/output/` by default. The output directory is created on the user's computer when needed.
+生成文件默认保存在 `~/cutstack-booklet-printer/output/`。程序会在使用者的电脑上按需创建此目录。
 
-## Main components
+## 主要文件
 
-- `main.py`: app entry point and single-instance guard.
-- `ui.py`: Tkinter editor, layout controls, PDF preview, and print actions.
-- `editor_document.py`: text normalization, pagination, font selection, and source PDF generation.
-- `impose.py`: A4 page imposition and PDF output.
-- `printer.py`: PDF opening, preview rendering support, and optional CUPS printing.
-- `assets/`: app icon and menu artwork.
-- `requirements.txt`: Python package requirements.
-- `run.sh`, `launcher_guard.sh`: local source launcher and its minimal helper.
-- `build_cutstack_app.sh`, `start_cutstack_booklet_printer.sh`, `install_cutstack_app.sh`: macOS app build, launch, and install scripts.
+- `main.py`：程序入口和单实例检查。
+- `ui.py`：Tkinter 编辑界面、排版设置、PDF 预览和打印操作。
+- `editor_document.py`：文本整理、分页、字体选择和源 PDF 生成。
+- `impose.py`：A4 页面拼版和 PDF 输出。
+- `printer.py`：打开 PDF、预览渲染和可选的 CUPS 打印。
+- `assets/`：应用图标和菜单图片资源。
+- `requirements.txt`：Python 依赖清单。
+- `run.sh`、`launcher_guard.sh`：源码启动脚本及其辅助组件。
+- `build_cutstack_app.sh`、`start_cutstack_booklet_printer.sh`、`install_cutstack_app.sh`：macOS 应用包的构建、启动和安装脚本。
 
-## Requirements
+## 运行环境和依赖
 
-- Python 3 with Tk support.
-- Packages listed in `requirements.txt`.
-- macOS or Linux desktop tools for opening PDFs; CUPS is needed for direct printing.
-- Poppler is optional. When available, it can be used for PDF preview rendering.
+- 安装了 Tk 支持的 Python 3。
+- 安装 `requirements.txt` 中列出的 Python 依赖。
+- macOS 或 Linux 桌面环境及其 PDF 打开工具；直接打印需要 CUPS。
+- Poppler 为可选组件。安装后可用于 PDF 预览渲染。
 
-Install Python dependencies from this directory:
+在本目录中创建 Python 环境并安装依赖：
 
 ```bash
 python3 -m venv .venv
@@ -41,16 +41,18 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-Run the source version with:
+## 启动和构建
+
+用源码启动：
 
 ```bash
 ./run.sh
 ```
 
-On macOS, `./start_cutstack_booklet_printer.sh` builds the app bundle on first use and opens it. After changing source files, run `./build_cutstack_app.sh` to rebuild; `./install_cutstack_app.sh` rebuilds and installs the bundle in Applications. Building an app bundle requires macOS build tools such as `sips` and `iconutil`.
+在 macOS 上，首次运行 `./start_cutstack_booklet_printer.sh` 时会构建应用包并打开。修改源码后，先运行 `./build_cutstack_app.sh` 重新构建；运行 `./install_cutstack_app.sh` 会重新构建并安装到“应用程序”目录。构建 macOS 应用包需要 `sips`、`iconutil` 等系统工具。
 
-The included code is a source release, not a verified prebuilt distribution. If it fails on a particular system or lacks a required component, users can ask their own Agent to inspect the environment, supply compatible dependencies, and rebuild it.
+当前仓库发布的是源码，不附带经过验证的预编译应用。如果在特定系统上运行失败或缺少组件，请使用者让自己的 Agent 检查本机环境、补齐兼容依赖并重新构建。
 
-## License
+## 许可
 
-This project follows the repository's [CC BY-NC-SA 4.0 license](../LICENSE). See the repository [README](../README.md) and [NOTICE](../NOTICE.md) for attribution and scope. Python packages and system tools remain under their own licenses.
+本项目遵循仓库的 [CC BY-NC-SA 4.0 许可](../LICENSE)。署名和许可范围说明见仓库的 [首页](../README.md) 与 [NOTICE](../NOTICE.md)。Python 依赖包和系统工具仍分别遵循其自身许可。
