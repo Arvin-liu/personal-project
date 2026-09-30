@@ -9,3 +9,6 @@ launch_token.txt
 *.app/
 build/
 dist/
+cutstack-booklet-printer/.build/
+cutstack-booklet-printer/.pytest_cache/
+cutstack-booklet-printer/output/

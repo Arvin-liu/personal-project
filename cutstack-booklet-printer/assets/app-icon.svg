@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="220" fill="#2b6cb0"/>
+  <text x="512" y="250" font-size="150" text-anchor="middle" fill="#ffffff" font-family="-apple-system,Helvetica,Arial,sans-serif" font-weight="bold">CS</text>
+  <rect x="256" y="318" width="512" height="356" rx="28" fill="#ffffff"/>
+  <rect x="320" y="378" width="384" height="236" rx="16" fill="#2b6cb0"/>
+  <rect x="430" y="674" width="164" height="64" rx="14" fill="#ffffff"/>
+  <rect x="300" y="700" width="424" height="14" rx="7" fill="#ffffff" opacity="0.85"/>
+</svg>
