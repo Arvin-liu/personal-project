@@ -2,15 +2,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_NAME="英文阅读器"
-DISPLAY_NAME="英文阅读器"
+APP_NAME="语言学习器"
+DISPLAY_NAME="语言学习器"
 APP_DIR="$ROOT_DIR/$APP_NAME.app"
+LEGACY_APP_DIR="$ROOT_DIR/英文阅读器.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RES_DIR="$CONTENTS_DIR/Resources"
 LAUNCHER="$MACOS_DIR/$APP_NAME"
 ICON_SRC="$ROOT_DIR/assets/app-icon.svg"
-ROOT_VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
+ROOT_VENV_PYTHON="$ROOT_DIR/../.venv/bin/python"
 ICONSET_DIR="$APP_DIR/icon.iconset"
 ICON_ICNS="$CONTENTS_DIR/Resources/$APP_NAME.icns"
 LAUNCH_TOKEN="$(python3 - <<'PY'
@@ -22,7 +23,7 @@ TOKEN_FILE="$ROOT_DIR/launch_token.txt"
 MACOS_TOKEN_FILE="$MACOS_DIR/launch_token.txt"
 RES_TOKEN_FILE="$RES_DIR/launch_token.txt"
 
-rm -rf "$APP_DIR"
+rm -rf "$APP_DIR" "$LEGACY_APP_DIR"
 mkdir -p "$MACOS_DIR" "$RES_DIR"
 printf '%s\n' "$LAUNCH_TOKEN" > "$TOKEN_FILE"
 printf '%s\n' "$LAUNCH_TOKEN" > "$MACOS_TOKEN_FILE"
@@ -31,7 +32,7 @@ printf '%s\n' "$LAUNCH_TOKEN" > "$RES_TOKEN_FILE"
 cp "$ROOT_DIR"/app.py "$RES_DIR"/
 cp "$ROOT_DIR"/hermes_fast_oneshot.py "$RES_DIR"/
 cp "$ROOT_DIR"/README.md "$RES_DIR"/
-cp "$ROOT_DIR"/start_ebook_reader.sh "$RES_DIR"/
+cp "$ROOT_DIR"/start_language_learner.sh "$RES_DIR"/
 cp "$ROOT_DIR"/launcher_guard.sh "$RES_DIR"/
 cp "$ICON_SRC" "$RES_DIR/$APP_NAME.svg"
 
@@ -58,7 +59,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key>
   <string>${DISPLAY_NAME}</string>
   <key>CFBundleIdentifier</key>
-  <string>io.github.arvin-liu.personalenglishreader</string>
+  <string>com.zhiyuan.languagelearner</string>
   <key>CFBundleVersion</key>
   <string>1.0.0</string>
   <key>CFBundleShortVersionString</key>
@@ -117,14 +118,14 @@ PYTHON_BIN=\$(pd_find_python 'import tkinter' \\
   "/usr/bin/python3") || PYTHON_BIN=""
 
 if [[ -z "\$PYTHON_BIN" ]]; then
-  osascript -e 'display alert "英文阅读器" message "找不到带 Tk 的 Python 3 环境。请安装 Python 3 或设置 PRO_DOWNLOADER_PYTHON。"' >/dev/null 2>&1 || true
+  osascript -e 'display alert "语言学习器" message "找不到带 Tk 的 Python 3 环境。请安装 Python 3 或设置 PRO_DOWNLOADER_PYTHON。"' >/dev/null 2>&1 || true
   exit 1
 fi
 
 mkdir -p "\$APP_DATA_DIR"
 export APP_DATA_DIR="\$APP_DATA_DIR"
 export PIPER_MODEL_DIR="\$PIPER_MODEL_DIR"
-# 固定句子朗读音色（与 start_ebook_reader.sh 保持一致）：gb→alba，us→lessac。
+# 固定句子朗读音色（与 start_language_learner.sh 保持一致）：gb→alba，us→lessac。
 # 单词音色由 app.py 内的 WORD_VOICE_PREFERENCE 单独挑选（gb→semaine/us→amy），不在此固定。
 ALBA_MODEL="\$PIPER_MODEL_DIR/en/en_GB/alba/medium/en_GB-alba-medium.onnx"
 if [[ -f "\$ALBA_MODEL" ]]; then

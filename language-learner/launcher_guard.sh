@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Minimal launch helpers used by this standalone English Reader project.
+# Minimal launch helpers used by the Language Learner app bundle.
 
 pd_parent_command() {
   ps -o comm= -p "${PPID}" 2>/dev/null | awk '{n=$1; sub(".*/", "", n); print n}'
@@ -14,7 +14,7 @@ pd_require_allowed_parent() {
       ;;
     zsh|bash|sh|dash|ksh|fish|python|python3|python3.*|node|npm|codex|Codex|Terminal|iTerm2|Warp|Alacritty|WezTerm|Code|Code\ Helper|Visual\ Studio\ Code)
       echo "[ERROR] Refusing direct launch from parent process: ${parent_comm:-unknown}" >&2
-      echo "[ERROR] Start this project from its own launcher or app bundle instead." >&2
+      echo "[ERROR] Start the app from its launcher or app bundle." >&2
       exit 1
       ;;
   esac
@@ -25,36 +25,19 @@ pd_require_allowed_parent() {
 pd_init_launch_token() {
   local caller_dir token_file token_value
   caller_dir="$(cd "$(dirname "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")" && pwd)"
-  token_file="${PD_LAUNCH_TOKEN_FILE:-$caller_dir/launch_token.txt}"
-  if [[ -z "${PRO_DOWNLOADER_LAUNCH_TOKEN:-}" ]]; then
+  token_file="${LANGUAGE_LEARNER_LAUNCH_TOKEN_FILE:-$caller_dir/launch_token.txt}"
+  if [[ -z "${LANGUAGE_LEARNER_LAUNCH_TOKEN:-}" ]]; then
     if [[ ! -f "$token_file" ]]; then
-      echo "[ERROR] Missing launch token file: $token_file" >&2
-      echo "[ERROR] Start this project through its own launcher bundle only." >&2
+      echo "[ERROR] Missing launch token file. Build and start the app bundle first." >&2
       exit 1
     fi
     token_value="$(tr -d '\r\n' < "$token_file")"
     if [[ -z "$token_value" ]]; then
-      echo "[ERROR] Empty launch token file: $token_file" >&2
+      echo "[ERROR] Empty launch token file." >&2
       exit 1
     fi
-    export PRO_DOWNLOADER_LAUNCH_TOKEN="$token_value"
+    export LANGUAGE_LEARNER_LAUNCH_TOKEN="$token_value"
   fi
-  if [[ -z "${PRO_DOWNLOADER_LAUNCH_TOKEN:-}" ]]; then
-    echo "[ERROR] Launch token missing after initialization." >&2
-    exit 1
-  fi
-}
-
-pd_spawn_managed() {
-  local pid
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$@" &
-  else
-    "$@" &
-  fi
-  pid=$!
-  PD_CHILD_PIDS+=("$pid")
-  printf '%s\n' "$pid"
 }
 
 pd_kill_process_group() {
@@ -73,6 +56,18 @@ pd_kill_tracked_children() {
   for pid in "${PD_CHILD_PIDS[@]:-}"; do
     pd_kill_process_group "$pid"
   done
+}
+
+pd_spawn_managed() {
+  local pid
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" &
+  else
+    "$@" &
+  fi
+  pid=$!
+  PD_CHILD_PIDS+=("$pid")
+  printf '%s\n' "$pid"
 }
 
 pd_notify() {

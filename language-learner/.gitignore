@@ -1,0 +1,10 @@
+data/
+__pycache__/
+*.pyc
+.DS_Store
+*.app/
+launch_token.txt
+.venv/
+.env
+.env.*
+!.env.example
