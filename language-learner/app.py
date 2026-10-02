@@ -200,8 +200,9 @@ WORD_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 # 语义隐性流动按“单词 + 上下文 + 查询类型”保存多条历史结果，同样按最后触发时间清理。
 SEMANTIC_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 SEMANTIC_CACHE_SCHEMA_VERSION = 1
-MAX_CACHE_WORKERS = 4
-AUTO_CACHE_SENTENCE_LIMIT = 40
+# Article-wide Piper synthesis runs in the background. One worker keeps ONNX inference
+# from occupying several CPU cores at once while still filling the sentence cache.
+MAX_CACHE_WORKERS = 1
 YOUDAO_TIMEOUT_SECONDS = 8
 # 词典悬浮窗使用固定窄宽；Text 显式限制请求尺寸，避免默认 80 列把窗口撑得过宽。
 DICTIONARY_POPUP_WIDTH = 210
@@ -337,6 +338,8 @@ STRUCTURE_ROLE_COLORS = {
     "connector": "structure_connector",
     "tense": "structure_tense",
 }
+
+LANGUAGE_STRUCTURE_READ_DIM_RATIO = 0.85
 # 分句按英文/中文标点切分：逗号、分号、冒号也直接形成学习单元边界，
 # 避免一行里塞进多个从句，让朗读、译文和进度记录都更短、更容易消化。
 SENTENCE_HARD_PUNCTUATION = set(".!?;:。！？；：")
@@ -2978,24 +2981,20 @@ class ReaderApp:
         self._show_scrollbar_temporarily("reader")
         if getattr(event, "num", None) == 4:
             self.reader_canvas.yview_scroll(-3, "units")
-            self._draw_reader_canvas()
             return "break"
         if getattr(event, "num", None) == 5:
             self.reader_canvas.yview_scroll(3, "units")
-            self._draw_reader_canvas()
             return "break"
         delta = getattr(event, "delta", 0)
         if delta:
             step = -1 * int(delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
             self.reader_canvas.yview_scroll(step * 3, "units")
-            self._draw_reader_canvas()
         return "break"
 
     def _reader_yview(self, *args: object) -> None:
         if self.reader_canvas is None:
             return
         self.reader_canvas.yview(*args)
-        self._draw_reader_canvas()
 
     def _live_dictionary_popups(self) -> list[DictionaryPopupState]:
         """Return currently mapped dictionary windows without mutating the registry.
@@ -3514,7 +3513,6 @@ class ReaderApp:
         # 仅文稿画布的鼠标 / 布局交互（非全局快捷键）
         self.reader_canvas.bind("<Configure>", self._handle_reader_resize)
         self.reader_canvas.bind("<Motion>", self._handle_reader_motion)
-        self.reader_canvas.bind("<Leave>", self._clear_hover_sentence, add="+")
         self.reader_canvas.bind("<Button-1>", self._handle_sentence_click)
         self.reader_canvas.bind("<B1-Motion>", self._handle_ctrl_selection_motion, add="+")
         self.reader_canvas.bind("<ButtonRelease-1>", self._finish_ctrl_selection, add="+")
@@ -3588,7 +3586,6 @@ class ReaderApp:
                         self.language_structure_parts.sort(key=lambda item: (item.start, item.depth, item.end))
                         self.language_structure_status = f"整篇语言结构已返回 · {completed}/{total} 句"
                         self._update_language_structure_settings_status()
-                        self._layout_reader_canvas()
                         self._refresh_following_language_structure_popup()
                 elif event == "structure_done":
                     request_id, total, error, failed_items = payload  # type: ignore[misc]
@@ -3625,6 +3622,7 @@ class ReaderApp:
                         and regeneration_id == self._language_structure_sentence_request_ids.get(sentence_index)
                     ):
                         self._language_structure_regenerating_sentences.discard(sentence_index)
+                        structure_changed = False
                         if error:
                             self._language_structure_sentence_notices.pop(sentence_index, None)
                             self._language_structure_sentence_errors[sentence_index] = str(error)
@@ -3654,6 +3652,7 @@ class ReaderApp:
                                     item for item in self.language_structure_sentences
                                     if item.sentence_index != sentence_index
                                 ] + [analysis]
+                                structure_changed = True
                                 self.language_structure_sentences.sort(key=lambda item: item.start)
                                 self.language_structure_parts = sorted(
                                     (part for item in self.language_structure_sentences for part in item.parts),
@@ -3665,7 +3664,8 @@ class ReaderApp:
                                 )
                                 self.language_structure_status = f"第 {sentence_index + 1} 句结构释义已生成并保存"
                         self._update_language_structure_settings_status()
-                        self._draw_reader_canvas()
+                        if structure_changed:
+                            self._draw_language_structure_marks(sentence_index=sentence_index)
                         if (
                             self.language_structure_popup is not None
                             and self.language_structure_popup.winfo_exists()
@@ -3861,6 +3861,8 @@ class ReaderApp:
         self.language_structure_sentences = []
         self.language_structure_parts = []
         self.language_structure_selected_part_id = ""
+        if self.reader_canvas is not None:
+            self.reader_canvas.delete("language_structure_mark")
         self.language_structure_error = ""
         self._language_structure_regenerating_sentences.clear()
         self._language_structure_sentence_errors.clear()
@@ -4357,6 +4359,7 @@ class ReaderApp:
             self.pending_progress_jump = False
             self._jump_to_learning_progress()
         self._draw_reader_canvas()
+        self._draw_language_structure_marks()
 
     def _iter_reader_blocks(self, text: str) -> list[ReaderBlock]:
         blocks: list[ReaderBlock] = []
@@ -4617,16 +4620,13 @@ class ReaderApp:
             or not self.language_structure_parts
         ):
             return base_line_height
+        line_start = min((token.start for token in tokens), default=0)
+        line_end = max((token.end for token in tokens), default=line_start)
         line_depth = max(
             (
-                part.depth
-                for part in self.language_structure_parts
-                if any(
-                    not self._token_is_translation(token)
-                    and token.start < part.end
-                    and token.end > part.start
-                    for token in tokens
-                )
+                max((part.depth for part in analysis.parts), default=-1)
+                for analysis in self._language_structure_analyses_overlapping(line_start, line_end)
+                if analysis.parts
             ),
             default=-1,
         )
@@ -4764,10 +4764,14 @@ class ReaderApp:
             content_height = int(float(str(scrollregion).split()[-1])) if scrollregion else self.reader_canvas.winfo_height()
         except (ValueError, IndexError):
             content_height = self.reader_canvas.winfo_height()
-        self.reader_canvas.delete("all")
-        # 全量绘制：滚动时不再重绘（见 _handle_scroll），只靠 Tk 原生视口移动，
-        # 因此一次性把所有 token 画进 Canvas，滚动天然实时、零 Python 开销，彻底消除
-        # 「滑了屏幕才动」的延迟。高亮/选中等低频状态变化仍走这里整重绘。
+        # 句中结构标记是独立的静态图层。播放进度等普通状态重绘正文时保留该图层，
+        # 只有重新排版或单句结构更新时才重新计算标记。
+        for item_id in self.reader_canvas.find_all():
+            if "language_structure_mark" not in self.reader_canvas.gettags(item_id):
+                self.reader_canvas.delete(item_id)
+        if self.reader_mode == READER_MODE_DICTIONARY or not self.language_structure_visible:
+            self.reader_canvas.delete("language_structure_mark")
+        # 滚动只移动 Tk 原生 Canvas 视口；鼠标移动仅更新光标，不触发正文或结构重绘。
         if self.reader_all_selected and self.raw_text and self.reader_mode != READER_MODE_DICTIONARY:
             width = self.reader_canvas.winfo_width()
             self.reader_canvas.create_rectangle(
@@ -4808,7 +4812,7 @@ class ReaderApp:
         )
         for _y1, _y2, line_tokens in self.reader_lines:
             line_spans = [] if self.reader_mode == READER_MODE_DICTIONARY else [
-                span for span in (self.active_sentence, self.hovered_sentence)
+                span for span in (self.active_sentence,)
                 if span is not None
                 and any(
                     token.role != "translation"
@@ -4832,9 +4836,13 @@ class ReaderApp:
                         max(0, _y1 - 2),
                         overlapping[-1].x + overlapping[-1].width + 6,
                         _y2 + 2,
-                        fill=THEME["sentence_band"],
+                        fill=self._color_for_reader_sentence(THEME["sentence_band"], span),
                         outline="",
-                        tags=("sentence_band",),
+                        tags=(
+                            "sentence_band",
+                            f"sentence_band_{span.start}_{span.end}",
+                            self._reader_sentence_tag(span),
+                        ),
                     )
             for start, end in lookup_spans:
                 overlapping = [
@@ -4845,6 +4853,7 @@ class ReaderApp:
                     and token.end > start
                 ]
                 if overlapping:
+                    sentence = self._reader_sentence_for_token(overlapping[0])
                     # Lookup is a background-only cue. Draw it before token text;
                     # _token_text_color never uses lookup state to choose a glyph color.
                     self.reader_canvas.create_rectangle(
@@ -4852,9 +4861,14 @@ class ReaderApp:
                         max(0, _y1 - 3),
                         overlapping[-1].x + overlapping[-1].width + 3,
                         _y2 + 3,
-                        fill=THEME["lookup_highlight"],
+                        fill=self._color_for_reader_sentence(
+                            THEME["lookup_highlight"], sentence
+                        ),
                         outline="",
-                        tags=("lookup_highlight",),
+                        tags=(
+                            "lookup_highlight",
+                            *((self._reader_sentence_tag(sentence),) if sentence is not None else ()),
+                        ),
                     )
             if self.reader_selection_active and self.reader_selection_start and self.reader_selection_end:
                 selection_start = min(
@@ -4881,9 +4895,13 @@ class ReaderApp:
                         tags=("reader_selection",),
                     )
             for token in line_tokens:
-                fill = self._token_text_color(token)
+                sentence = self._reader_sentence_for_token(token)
+                fill = self._token_text_color(token, sentence)
                 font = self._token_font(token)
                 text_y = self._token_text_y(token, font)
+                text_tags = ("reader_text",)
+                if sentence is not None:
+                    text_tags += (self._reader_sentence_tag(sentence),)
                 if token.role == "dictionary_word" and token.text:
                     initial = token.text[:1]
                     remainder = token.text[1:]
@@ -4896,7 +4914,7 @@ class ReaderApp:
                         anchor="nw",
                         fill=fill,
                         font=initial_font,
-                        tags=("reader_text",),
+                        tags=text_tags,
                     )
                     if remainder:
                         self.reader_canvas.create_text(
@@ -4906,7 +4924,7 @@ class ReaderApp:
                             anchor="nw",
                             fill=fill,
                             font=body_font,
-                            tags=("reader_text",),
+                            tags=text_tags,
                         )
                 else:
                     self.reader_canvas.create_text(
@@ -4916,25 +4934,47 @@ class ReaderApp:
                         anchor="nw",
                         fill=fill,
                         font=font,
-                        tags=("reader_text",),
+                        tags=text_tags,
                     )
-        self._draw_language_structure_marks()
+        self.reader_canvas.tag_raise("language_structure_mark")
         self.reader_canvas.tag_raise("reader_text")
         self._draw_floating_controls()
         self._position_sentence_translation_popup()
         self._position_language_structure_popup()
 
-    def _draw_language_structure_marks(self) -> None:
+    def _draw_language_structure_marks(self, sentence_index: int | None = None) -> None:
         canvas = self.reader_canvas
+        sentence_tag = (
+            f"language_structure_sentence_{sentence_index}"
+            if sentence_index is not None else "language_structure_mark"
+        )
+        if canvas is not None:
+            canvas.delete(sentence_tag)
         if (
             canvas is None
             or not self.language_structure_visible
             or self.reader_mode != READER_MODE_ARTICLE
         ):
             return
+        analyses = (
+            [analysis for analysis in self.language_structure_sentences
+             if analysis.sentence_index == sentence_index]
+            if sentence_index is not None
+            else self.language_structure_sentences
+        )
+        max_depth_by_sentence = {
+            analysis.sentence_index: max((part.depth for part in analysis.parts), default=0)
+            for analysis in analyses
+        }
         for _y1, _y2, line_tokens in self.reader_lines:
-            line_marks: list[tuple[LanguageStructurePart, list[ReaderToken]]] = []
-            for part in self.language_structure_parts:
+            if not line_tokens:
+                continue
+            line_start = min(token.start for token in line_tokens)
+            line_end = max(token.end for token in line_tokens)
+            line_parts = self._language_structure_parts_overlapping(line_start, line_end)
+            for part in line_parts:
+                if sentence_index is not None and part.sentence_index != sentence_index:
+                    continue
                 overlapping = [
                     token for token in line_tokens
                     if not self._token_is_translation(token)
@@ -4944,29 +4984,114 @@ class ReaderApp:
                 ]
                 if not overlapping:
                     continue
-                line_marks.append((part, overlapping))
-
-            if not line_marks:
-                continue
-            for part, overlapping in line_marks:
                 color_key = STRUCTURE_ROLE_COLORS.get(part.role, "structure_modifier")
-                y = max(
-                    self._token_text_y(token, self._token_font(token))
-                    + self._token_font(token).metrics("linespace")
-                    + LANGUAGE_STRUCTURE_UNDERLINE_GAP
-                    + max(0, part.depth) * LANGUAGE_STRUCTURE_UNDERLINE_STEP
-                    for token in overlapping
+                for sentence, sentence_tokens in self._group_reader_tokens_by_sentence(overlapping):
+                    y = max(
+                        self._token_text_y(token, self._token_font(token))
+                        + self._token_font(token).metrics("linespace")
+                        + LANGUAGE_STRUCTURE_UNDERLINE_GAP
+                        + max(
+                            0,
+                            max_depth_by_sentence.get(part.sentence_index, part.depth) - part.depth,
+                        ) * LANGUAGE_STRUCTURE_UNDERLINE_STEP
+                        for token in sentence_tokens
+                    )
+                    canvas.create_line(
+                        sentence_tokens[0].x,
+                        y,
+                        sentence_tokens[-1].x + sentence_tokens[-1].width,
+                        y,
+                        fill=self._color_for_structure_mark(THEME[color_key], sentence),
+                        width=3 if part.part_id == self.language_structure_selected_part_id else 2,
+                        capstyle=tk.ROUND,
+                        tags=(
+                            "language_structure_mark",
+                            f"language_structure_sentence_{part.sentence_index}",
+                            f"language_structure_part_{part.part_id}",
+                            *((self._reader_sentence_tag(sentence),) if sentence is not None else ()),
+                        ),
+                    )
+        canvas.tag_raise("language_structure_mark")
+        canvas.tag_raise("reader_text")
+        canvas.tag_raise("floating_control")
+
+    def _draw_sentence_band(self, span: SentenceSpan | None) -> None:
+        """Update the current sentence highlight without repainting the article canvas."""
+        canvas = self.reader_canvas
+        if canvas is None:
+            return
+        canvas.delete("sentence_band")
+        if span is None or self.reader_mode != READER_MODE_ARTICLE:
+            return
+        for y1, y2, line_tokens in self.reader_lines:
+            overlapping = [
+                token for token in line_tokens
+                if not self._token_is_translation(token)
+                and re.search(r"[A-Za-z0-9]", token.text)
+                and token.start < span.end
+                and token.end > span.start
+            ]
+            if not overlapping:
+                continue
+            canvas.create_rectangle(
+                max(6, overlapping[0].x - 6),
+                max(0, y1 - 2),
+                overlapping[-1].x + overlapping[-1].width + 6,
+                y2 + 2,
+                fill=self._color_for_reader_sentence(THEME["sentence_band"], span),
+                outline="",
+                tags=(
+                    "sentence_band",
+                    f"sentence_band_{span.start}_{span.end}",
+                    self._reader_sentence_tag(span),
+                ),
+            )
+        canvas.tag_raise("sentence_band")
+        canvas.tag_raise("lookup_highlight")
+        canvas.tag_raise("language_structure_mark")
+        canvas.tag_raise("reader_text")
+        canvas.tag_raise("floating_control")
+
+    def _refresh_lookup_highlights(self) -> None:
+        """Refresh lookup backgrounds independently of text and grammar rendering."""
+        canvas = self.reader_canvas
+        if canvas is None:
+            return
+        canvas.delete("lookup_highlight")
+        if self.reader_mode == READER_MODE_DICTIONARY:
+            return
+        lookup_spans = self._current_article_lookup_spans()
+        for _y1, y2, line_tokens in self.reader_lines:
+            for start, end in lookup_spans:
+                overlapping = [
+                    token for token in line_tokens
+                    if not self._token_is_translation(token)
+                    and re.search(r"[A-Za-z0-9]", token.text)
+                    and token.start < end
+                    and token.end > start
+                ]
+                if not overlapping:
+                    continue
+                sentence = self._reader_sentence_for_token(overlapping[0])
+                canvas.create_rectangle(
+                    max(2, overlapping[0].x - 3),
+                    max(0, _y1 - 3),
+                    overlapping[-1].x + overlapping[-1].width + 3,
+                    y2 + 3,
+                    fill=self._color_for_reader_sentence(
+                        THEME["lookup_highlight"], sentence
+                    ),
+                    outline="",
+                    tags=(
+                        "lookup_highlight",
+                        *((self._reader_sentence_tag(sentence),) if sentence is not None else ()),
+                    ),
                 )
-                canvas.create_line(
-                    overlapping[0].x,
-                    y,
-                    overlapping[-1].x + overlapping[-1].width,
-                    y,
-                    fill=THEME[color_key],
-                    width=3 if part.part_id == self.language_structure_selected_part_id else 2,
-                    capstyle=tk.ROUND,
-                    tags=("language_structure_mark", f"language_structure_part_{part.part_id}"),
-                )
+        canvas.tag_lower("lookup_highlight")
+        canvas.tag_raise("sentence_band")
+        canvas.tag_raise("language_structure_mark")
+        canvas.tag_raise("reader_text")
+        canvas.tag_raise("floating_control")
 
     def _token_font(self, token: ReaderToken) -> tkfont.Font:
         if token.role == "title":
@@ -5024,12 +5149,119 @@ class ReaderApp:
         info = self._term_entry_for_token(token)
         return bool(info and self._term_looked_up_in_current_article(info[0], info[1]))
 
-    def _token_text_color(self, token: ReaderToken) -> str:
+    def _token_text_color(
+        self,
+        token: ReaderToken,
+        sentence: SentenceSpan | None = None,
+    ) -> str:
         structure_part = self._language_structure_part_for_token(token)
         if structure_part is not None:
             color_key = STRUCTURE_ROLE_COLORS.get(structure_part.role, "structure_modifier")
-            return THEME[color_key]
-        return THEME["ink"]
+            color = THEME[color_key]
+        else:
+            color = THEME["ink"]
+        return self._color_for_reader_sentence(
+            color,
+            sentence,
+        )
+
+    @staticmethod
+    def _blend_color_toward_background(color: str, ratio: float = 0.5) -> str:
+        """Reduce a sentence color to half strength while retaining its hue."""
+        background = THEME["panel"]
+        try:
+            foreground_rgb = tuple(int(color[index:index + 2], 16) for index in (1, 3, 5))
+            background_rgb = tuple(int(background[index:index + 2], 16) for index in (1, 3, 5))
+            blended = tuple(
+                round(foreground * (1 - ratio) + backdrop * ratio)
+                for foreground, backdrop in zip(foreground_rgb, background_rgb)
+            )
+        except (ValueError, IndexError):
+            return color
+        return "#" + "".join(f"{channel:02x}" for channel in blended)
+
+    def _reader_sentence_tag(self, span: SentenceSpan) -> str:
+        return f"reader_sentence_{self._sentence_key(span)}"
+
+    def _reader_sentence_for_token(self, token: ReaderToken) -> SentenceSpan | None:
+        if token.role == "translation":
+            return self._progress_span_for_token(token)
+        return self._sentence_for_offset(token.start)
+
+    def _group_reader_tokens_by_sentence(
+        self,
+        tokens: list[ReaderToken],
+    ) -> list[tuple[SentenceSpan | None, list[ReaderToken]]]:
+        groups: list[tuple[SentenceSpan | None, list[ReaderToken]]] = []
+        for token in tokens:
+            span = self._reader_sentence_for_token(token)
+            if groups and groups[-1][0] == span:
+                groups[-1][1].append(token)
+            else:
+                groups.append((span, [token]))
+        return groups
+
+    def _color_for_reader_sentence(
+        self,
+        color: str,
+        span: SentenceSpan | None,
+    ) -> str:
+        if span is not None and self._sentence_key(span) in self.played_sentence_keys:
+            return self._blend_color_toward_background(color)
+        return color
+
+    def _color_for_structure_mark(
+        self,
+        color: str,
+        span: SentenceSpan | None,
+    ) -> str:
+        if span is not None and self._sentence_key(span) in self.played_sentence_keys:
+            return self._blend_color_toward_background(
+                color,
+                ratio=LANGUAGE_STRUCTURE_READ_DIM_RATIO,
+            )
+        return color
+
+    def _dim_reader_sentence(self, span: SentenceSpan) -> None:
+        """Dim the already-rendered visual layers for one completed sentence."""
+        canvas = self.reader_canvas
+        if canvas is None:
+            return
+        sentence_tag = self._reader_sentence_tag(span)
+        for item_id in canvas.find_withtag(sentence_tag):
+            try:
+                if "language_structure_mark" in canvas.gettags(item_id):
+                    continue
+                fill = canvas.itemcget(item_id, "fill")
+                if fill:
+                    canvas.itemconfigure(
+                        item_id,
+                        fill=self._blend_color_toward_background(fill),
+                    )
+            except tk.TclError:
+                continue
+        self._dim_language_structure_sentence(span)
+
+    def _dim_language_structure_sentence(self, span: SentenceSpan) -> None:
+        """Dim underline lines matched to the completed playback sentence."""
+        canvas = self.reader_canvas
+        if canvas is None:
+            return
+        for item_id in canvas.find_withtag(self._reader_sentence_tag(span)):
+            try:
+                if "language_structure_mark" not in canvas.gettags(item_id):
+                    continue
+                fill = canvas.itemcget(item_id, "fill")
+                if fill:
+                    canvas.itemconfigure(
+                        item_id,
+                        fill=self._blend_color_toward_background(
+                            fill,
+                            ratio=LANGUAGE_STRUCTURE_READ_DIM_RATIO,
+                        ),
+                    )
+            except tk.TclError:
+                continue
 
     def _current_article_lookup_spans(self) -> list[tuple[int, int]]:
         """Return only exact looked-up words/phrases in the current article."""
@@ -5079,7 +5311,7 @@ class ReaderApp:
         if not self.language_structure_visible or self._token_is_translation(token):
             return None
         matching = [
-            part for part in self.language_structure_parts
+            part for part in self._language_structure_parts_overlapping(token.start, token.end)
             if token.start < part.end and token.end > part.start
         ]
         return max(
@@ -5087,6 +5319,40 @@ class ReaderApp:
             key=lambda part: (part.depth, -(part.end - part.start)),
             default=None,
         )
+
+    def _language_structure_parts_overlapping(
+        self,
+        start: int,
+        end: int,
+    ) -> list[LanguageStructurePart]:
+        """Find marked parts in just the article sentences intersecting this range."""
+        return [
+            part
+            for analysis in self._language_structure_analyses_overlapping(start, end)
+            for part in analysis.parts
+            if part.start < end and part.end > start
+        ]
+
+    def _language_structure_analyses_overlapping(
+        self,
+        start: int,
+        end: int,
+    ) -> list[LanguageStructureSentence]:
+        sentences = self.language_structure_sentences
+        low, high = 0, len(sentences)
+        while low < high:
+            middle = (low + high) // 2
+            if sentences[middle].end <= start:
+                low = middle + 1
+            else:
+                high = middle
+        matches: list[LanguageStructureSentence] = []
+        for analysis in sentences[low:]:
+            if analysis.start >= end:
+                break
+            if analysis.end > start:
+                matches.append(analysis)
+        return matches
 
     def _token_is_translation(self, token: ReaderToken) -> bool:
         return token.role == "translation" or self._token_is_cjk(token)
@@ -5108,7 +5374,7 @@ class ReaderApp:
         return None
 
     def _span_is_highlighted(self, span: SentenceSpan) -> bool:
-        return self._same_sentence_span(self.active_sentence, span) or self._same_sentence_span(self.hovered_sentence, span)
+        return self._same_sentence_span(self.active_sentence, span)
 
     def _range_has_cjk(self, start: int, end: int) -> bool:
         return bool(re.search(r"[\u4e00-\u9fff]", self.raw_text[start:end]))
@@ -5121,7 +5387,6 @@ class ReaderApp:
             return "break"
         if self._scroll_span_to_view_fraction(target, 1 / 3):
             self._show_scrollbar_temporarily("reader")
-            self._draw_reader_canvas()
         return "break"
 
     def _stored_current_sentence_span(self) -> SentenceSpan | None:
@@ -5320,13 +5585,13 @@ class ReaderApp:
             self.pending_progress_jump = False
             self._jump_to_learning_progress()
         self._draw_reader_canvas()
+        # Session restore lays out the canvas before current_sentences is parsed.
+        # Rebuild the underline layer now so each mark gets the correct playback
+        # sentence tag and the persisted read-state color.
+        self._draw_language_structure_marks()
         # 重启或重新解析后，如果已有保存的当前句，也恢复它对应的译文浮窗。
         if self.active_sentence is not None:
             self._show_sentence_translation_for_span(self.active_sentence)
-            self._show_language_structure_popup(
-                self._language_structure_for_span(self.active_sentence),
-                follow_span=self.active_sentence,
-            )
         total = len(self.current_sentences)
         self.current_cache_token += 1
         token = self.current_cache_token
@@ -5342,10 +5607,9 @@ class ReaderApp:
 
         self._set_cache_progress(0.0)
         done_counter = {"done": 0, "failed": 0, "lock": threading.Lock()}
-        # 只缓存句段（英音 + 美音各一份）。单词/音标行不参加粘贴文章后的批量缓存；
-        # 它们只在用户实际查词或点击音标时进入跨文章单词缓存。
-        sentence_spans = list(self.current_sentences)[:AUTO_CACHE_SENTENCE_LIMIT]
-        jobs_total = len(sentence_spans) * 2
+        # 全文逐句预生成英音。单词发音不随文章批量生成，只在用户查词/选词时生成。
+        sentence_spans = list(self.current_sentences)
+        jobs_total = len(sentence_spans)
         threading.Thread(
             target=self._submit_cache_jobs,
             args=(sentence_spans, token, jobs_total, done_counter),
@@ -5362,11 +5626,8 @@ class ReaderApp:
         for index, span in enumerate(sentences):
             if token != self.current_cache_token or getattr(self, "_closing", False):
                 return
-            if index >= AUTO_CACHE_SENTENCE_LIMIT:
-                return
-            for accent in ("gb", "us"):
-                self.executor.submit(self._cache_sentence_worker, span.text, accent, token, total, counter)
-                time.sleep(0.002)
+            self.executor.submit(self._cache_sentence_worker, span.text, "gb", token, total, counter)
+            time.sleep(0.002)
 
     def _cache_sentence_worker(self, text: str, accent: str, token: int, total: int, counter: dict[str, int]) -> None:
         try:
@@ -5586,7 +5847,7 @@ class ReaderApp:
             and not self._same_sentence_span(previous, span)
             and self._sentence_key(previous) not in self.played_sentence_keys
         ):
-            self._mark_sentence_played(previous, redraw=False)
+            self._mark_sentence_played(previous)
         self._highlight_span(span)
         self.subtitle_sentence = span
         self.current_sentence_key = self._sentence_key(span)
@@ -5598,7 +5859,6 @@ class ReaderApp:
         # 译文不再由鼠标/双击触发，而是和当前朗读句绑定；回车切句、空格重播
         # 或点击句子时都会复用并移动同一个浮窗。
         self._scroll_span_to_view_fraction(span, 1 / 3)
-        self._draw_reader_canvas()
         self._show_sentence_translation_for_span(span)
         document_key = self._document_key()
 
@@ -5882,29 +6142,12 @@ class ReaderApp:
 
     def _handle_reader_motion(self, event: tk.Event[tk.Misc]) -> None:
         if self.reader_canvas is None:
-            return
+            return None
         current_tags = set(self.reader_canvas.gettags("current"))
         if self.reader_ctrl_mode or self._control_modifier(event):
             self._set_reader_cursor("xterm")
         elif not self.reader_selection_active:
             self._set_reader_cursor("hand2" if "language_structure_mark" in current_tags else "arrow")
-        if self.reader_mode == READER_MODE_DICTIONARY:
-            # 词典模式是纯单词表，不显示文章句子的悬停带状高亮。
-            if self.hovered_sentence is not None:
-                self.hovered_sentence = None
-                self._draw_reader_canvas()
-            return
-        span = self._sentence_for_event(event)
-        if self._same_sentence_span(span, self.hovered_sentence):
-            return
-        self.hovered_sentence = span
-        self._draw_reader_canvas()
-
-    def _clear_hover_sentence(self, _event: tk.Event[tk.Misc] | None = None) -> None:
-        if self.hovered_sentence is None:
-            return
-        self.hovered_sentence = None
-        self._draw_reader_canvas()
 
     @staticmethod
     def _same_sentence_span(left: SentenceSpan | None, right: SentenceSpan | None) -> bool:
@@ -5947,6 +6190,8 @@ class ReaderApp:
         if query_kind == "word" and " " in term and PHRASE_PATTERN.fullmatch(term):
             # 先把词组记为当前文章候选；查词成功后再进入待复习状态和模型上下文。
             self._record_phrase_candidate(term)
+        if query_kind == "word" and WORD_PATTERN.fullmatch(term):
+            self._precache_word_us_on_demand(term)
         self._play_text("sentence" if query_kind == "phrase" else "word", term)
         self._next_dictionary_popup_id += 1
         state = DictionaryPopupState(
@@ -6023,8 +6268,16 @@ class ReaderApp:
         return self._do_word_lookup(self._reader_token_for_event(event), (event.x_root, event.y_root))
 
     def _sentence_for_offset(self, offset: int) -> SentenceSpan | None:
-        for span in self.current_sentences:
-            if span.start <= offset <= span.end:
+        low = 0
+        high = len(self.current_sentences)
+        while low < high:
+            middle = (low + high) // 2
+            span = self.current_sentences[middle]
+            if offset < span.start:
+                high = middle
+            elif offset > span.end:
+                low = middle + 1
+            else:
                 return span
         return None
 
@@ -6122,6 +6375,7 @@ class ReaderApp:
             except (tk.TclError, TypeError, ValueError):
                 pass
         self._play_text("word", word.lower())
+        self._precache_word_us_on_demand(word.lower())
         return "break"
 
     def _handle_dictionary_group_word_lookup(self, event: tk.Event[tk.Misc]) -> str:
@@ -6343,11 +6597,11 @@ class ReaderApp:
 
     def _highlight_span(self, span: SentenceSpan) -> None:
         old_active_other = self.active_sentence is not None and not self._same_sentence_span(self.active_sentence, span)
-        already_highlighted = self._same_sentence_span(self.active_sentence, span) or self._same_sentence_span(self.hovered_sentence, span)
-        needs_redraw = old_active_other or not already_highlighted
+        already_highlighted = self._same_sentence_span(self.active_sentence, span)
+        needs_update = old_active_other or not already_highlighted
         self.active_sentence = span
-        if needs_redraw:
-            self._draw_reader_canvas()
+        if needs_update:
+            self._draw_sentence_band(span)
 
     def _complete_active_sentence(self) -> None:
         if self.active_sentence is None:
@@ -6357,7 +6611,7 @@ class ReaderApp:
         self.hovered_sentence = None
         self.subtitle_sentence = None
         self._set_translation_text("")
-        self._draw_reader_canvas()
+        self._draw_sentence_band(None)
 
     def _sentence_key(self, span: SentenceSpan) -> str:
         source = f"{span.start}:{span.end}:{normalize_whitespace(span.text).lower()}"
@@ -6366,15 +6620,17 @@ class ReaderApp:
     def _document_key(self) -> str:
         return hashlib.sha256(self.raw_text.encode("utf-8")).hexdigest()
 
-    def _mark_sentence_played(self, span: SentenceSpan, *, redraw: bool = True) -> None:
-        self.played_sentence_keys.add(self._sentence_key(span))
+    def _mark_sentence_played(self, span: SentenceSpan) -> None:
+        sentence_key = self._sentence_key(span)
+        is_newly_played = sentence_key not in self.played_sentence_keys
+        self.played_sentence_keys.add(sentence_key)
+        if is_newly_played:
+            self._dim_reader_sentence(span)
         self.current_sentence_key = self._sentence_key(span)
         self.current_sentence_text = span.text
         # 必须等播放器进程自然结束后才落库，打断或只点亮但未读完的句子不算已掌握。
         self._record_played_sentence_words(span)
         self._save_learning_progress()
-        if redraw:
-            self._draw_reader_canvas()
 
     def _save_learning_progress(self) -> None:
         if not self.raw_text:
@@ -6433,6 +6689,22 @@ class ReaderApp:
                     self.root.after(0, on_complete)
             except Exception as exc:
                 self.ui_queue.put(("play_error", str(exc)))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _precache_word_us_on_demand(self, word: str) -> None:
+        """Cache a word's US pronunciation only after an explicit word lookup/selection."""
+        normalized = self._normalize_term(word)
+        if self.cache is None or not WORD_PATTERN.fullmatch(normalized):
+            return
+
+        def task() -> None:
+            try:
+                assert self.cache is not None
+                self.cache.get_or_create("word", normalized, accent="us")
+            except Exception:
+                # Playback/lookup remains responsive; the US file can be retried if requested.
+                pass
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -9037,7 +9309,7 @@ Every pair must contain exactly one English sentence and its Chinese translation
             entry["definition"] = content
         entry["updated_at"] = time.time()
         self._save_wordbook()
-        self._refresh_wordbook_views()
+        self._refresh_wordbook_views(refresh_lookup_highlights=True)
 
     def _record_played_sentence_words(self, span: SentenceSpan) -> None:
         changed = False
@@ -9069,11 +9341,11 @@ Every pair must contain exactly one English sentence and its Chinese translation
         self._refresh_wordbook_views()
         return True
 
-    def _refresh_wordbook_views(self) -> None:
+    def _refresh_wordbook_views(self, *, refresh_lookup_highlights: bool = False) -> None:
         self.root.after(0, self._refresh_wordbook_popup)
         self.root.after(0, self._refresh_top_copy_btn)
-        if self.reader_canvas is not None and self.reader_canvas.winfo_exists():
-            self._draw_reader_canvas()
+        if refresh_lookup_highlights and self.reader_canvas is not None and self.reader_canvas.winfo_exists():
+            self._refresh_lookup_highlights()
 
     def _reset_current_wordbook(self) -> None:
         """清空文章时不清空持久化词库；只刷新当前文章视图。"""
@@ -9339,7 +9611,7 @@ Every pair must contain exactly one English sentence and its Chinese translation
             )
             return "break"
         analysis = self._language_structure_for_current_sentence()
-        if analysis is not None:
+        if analysis is not None and not self.language_structure_visible:
             self.language_structure_visible = True
             self._layout_reader_canvas()
         span = self.active_sentence or self._stored_current_sentence_span() or self._current_progress_span()
@@ -9360,8 +9632,11 @@ Every pair must contain exactly one English sentence and its Chinese translation
                 )
                 break
         if part is not None:
+            previous_part_id = self.language_structure_selected_part_id
             self.language_structure_selected_part_id = part.part_id
-            self._draw_reader_canvas()
+            if previous_part_id and previous_part_id != part.part_id:
+                canvas.itemconfigure(f"language_structure_part_{previous_part_id}", width=2)
+            canvas.itemconfigure(f"language_structure_part_{part.part_id}", width=3)
             analysis = next(
                 (item for item in self.language_structure_sentences if item.sentence_index == part.sentence_index),
                 None,
@@ -9678,11 +9953,19 @@ Every pair must contain exactly one English sentence and its Chinese translation
             )
 
             def select_part(part: LanguageStructurePart) -> str:
+                previous_part_id = self.language_structure_selected_part_id
                 self.language_structure_selected_part_id = part.part_id
+                if self.reader_canvas is not None:
+                    if previous_part_id and previous_part_id != part.part_id:
+                        self.reader_canvas.itemconfigure(
+                            f"language_structure_part_{previous_part_id}", width=2
+                        )
+                    self.reader_canvas.itemconfigure(
+                        f"language_structure_part_{part.part_id}", width=3
+                    )
                 target_span = SentenceSpan(part.start, part.end, part.text)
                 if self._scroll_span_to_view_fraction(target_span, 0.42):
                     self._show_scrollbar_temporarily("reader")
-                self._draw_reader_canvas()
                 return "break"
 
             if not analysis.parts:
